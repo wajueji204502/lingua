@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="description" content="中英双语对照翻译小工具，自动判断语言方向">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>LinguaMate 网页版</title>
+<style>
+  :root{--bg:#0b0d12;--card:#151923;--line:#242a38;--txt:#e6eaf2;--dim:#8b93a7;--acc:#4f8cff;--ok:#2ecc71}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 -apple-system,"PingFang SC","Noto Sans SC",sans-serif;padding:16px 14px 40px}
+  h1{font-size:19px;margin:4px 0 2px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:14px}
+  textarea{width:100%;min-height:160px;background:var(--card);border:1px solid var(--line);border-radius:14px;color:var(--txt);
+           padding:12px;font:16px/1.6 inherit;resize:vertical;outline:none}
+  textarea:focus{border-color:var(--acc)}
+  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  button{flex:1;min-width:104px;padding:12px 10px;border-radius:12px;border:1px solid var(--line);background:var(--card);
+         color:var(--txt);font-size:15px;font-weight:600}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  button:active{opacity:.75}
+  #status{color:var(--dim);font-size:13px;margin:12px 2px;min-height:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
+  .src{color:var(--dim);font-size:14px;white-space:pre-wrap}
+  .dst{font-size:17px;margin-top:8px;white-space:pre-wrap}
+  .tag{display:inline-block;font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-bottom:8px}
+  .err{color:#ff7a7a}
+</style>
+</head>
+<body>
+<h1>LinguaMate</h1>
+<div class="sub">粘贴中英文，自动判断方向 · 免费无需登录</div>
+
+<textarea id="in" placeholder="把中文或英文粘进来，一段一段空行分隔效果最好"></textarea>
+
+<div class="row">
+  <button class="primary" id="go">翻译</button>
+  <button id="copy">复制译文</button>
+  <button id="md">导出 .md</button>
+  <button id="clr">清空</button>
+</div>
+
+<div id="status"></div>
+<div id="out"></div>
+
+<script>
+const API = 'https://api.mymemory.translated.net/get';
+const $ = s => document.querySelector(s);
+const status = (t, err) => { const el = $('#status'); el.textContent = t || ''; el.className = err ? 'err' : ''; };
+const isCJK = s => { const h = (s.match(/[\u4e00-\u9fff]/g) || []).length, a = (s.match(/[A-Za-z0-9]/g) || []).length; return h / Math.max(1, h + a) > 0.2; };
+const chunk = (text, limit = 450) => {
+  const parts = text.split(/(?<=[。！？.!?\n])/); const out = []; let buf = '';
+  for (const p of parts) { if (buf.length + p.length > limit && buf) { out.push(buf); buf = ''; } buf += p; }
+  if (buf) out.push(buf); return out.length ? out : [text];
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function tr(text, src, dst) {
+  let res = '';
+  for (const c of chunk(text)) {
+    let done = false;
+    for (let i = 0; i < 3 && !done; i++) {
+      try {
+        const url = `${API}?q=${encodeURIComponent(c)}&langpair=${src}|${dst}`;
+        const r = await fetch(url);
+        const j = await r.json();
+        if (Number(j.responseStatus) !== 200) throw new Error(j.responseDetails || '接口返回异常');
+        res += j.responseData.translatedText; done = true;
+      } catch (e) {
+        if (i === 2) throw e;
+        await sleep(1200 * (i + 1));
+      }
+    }
+  }
+  return res;
+}
+
+let pairs = [];
+function render() {
+  $('#out').innerHTML = pairs.map((p, i) => `
+    <div class="card">
+      <span class="tag">${p.dir}</span>
+      <div class="src">${esc(p.src)}</div>
+      <div class="dst">${esc(p.dst)}</div>
+    </div>`).join('');
+}
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+$('#go').onclick = async () => {
+  const raw = $('#in').value.trim();
+  if (!raw) return status('先粘点东西进来', true);
+  let paras = raw.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+  if (paras.length === 1) { const lines = raw.split(/\n+/).map(s => s.trim()).filter(Boolean); if (lines.length > 1) paras = lines; }
+  pairs = []; render(); status(`共 ${paras.length} 段，开始翻译…`);
+  for (let i = 0; i < paras.length; i++) {
+    const p = paras[i], toEN = isCJK(p);
+    try {
+      const t = await tr(p, toEN ? 'zh-CN' : 'en', toEN ? 'en' : 'zh-CN');
+      pairs.push({ src: p, dst: t, dir: toEN ? '中 → 英' : '英 → 中' });
+      render(); status(`已完成 ${i + 1}/${paras.length}`);
+    } catch (e) {
+      status(`第 ${i + 1} 段失败：${e.message}（网络或接口限流，稍等再试）`, true); return;
+    }
+    localStorage.setItem('lm_text', raw);
+  }
+  status(`搞定，共 ${pairs.length} 段`);
+};
+
+$('#copy').onclick = async () => {
+  if (!pairs.length) return status('还没翻译', true);
+  const text = pairs.map(p => p.dst).join('\n\n');
+  try { await navigator.clipboard.writeText(text); status('译文已复制'); }
+  catch { status('复制失败，长按选中手动复制', true); }
+};
+
+$('#md').onclick = () => {
+  if (!pairs.length) return status('还没翻译', true);
+  const body = `# 双语对照\n\n> ${new Date().toLocaleString()}\n` +
+    pairs.map((p, i) => `\n## ${i + 1}\n\n**原文**\n\n${p.src}\n\n**译文**\n\n${p.dst}\n`).join('');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([body], { type: 'text/markdown' }));
+  a.download = '双语对照.md'; a.click();
+  status('已导出');
+};
+
+$('#clr').onclick = () => { $('#in').value = ''; pairs = []; render(); status(''); localStorage.removeItem('lm_text'); };
+
+const DEMO = '我非常期待与你们合作，希望我们能够建立长期的商业关系。\n\nPlease find the attached quotation for your review.';
+const saved = localStorage.getItem('lm_text');
+if (saved) { $('#in').value = saved; status('已恢复上次的内容'); }
+else { $('#in').value = DEMO; status('已填入示例，直接点「翻译」试试；换成你自己的内容即可'); }
+</script>
+</body>
+</html>
