@@ -2,36 +2,78 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="description" content="中英双语对照翻译小工具，自动判断语言方向">
+<meta name="description" content="中英双语对照翻译工具，支持术语表与大模型润色">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>LinguaMate 网页版</title>
 <style>
-  :root{--bg:#0b0d12;--card:#151923;--line:#242a38;--txt:#e6eaf2;--dim:#8b93a7;--acc:#4f8cff;--ok:#2ecc71}
+  :root{--bg:#0b0d12;--card:#151923;--line:#242a38;--txt:#e6eaf2;--dim:#8b93a7;--acc:#4f8cff;--ok:#2ecc71;--warn:#f0b429}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 -apple-system,"PingFang SC","Noto Sans SC",sans-serif;padding:16px 14px 40px}
   h1{font-size:19px;margin:4px 0 2px}
   .sub{color:var(--dim);font-size:13px;margin-bottom:14px}
-  textarea{width:100%;min-height:160px;background:var(--card);border:1px solid var(--line);border-radius:14px;color:var(--txt);
-           padding:12px;font:16px/1.6 inherit;resize:vertical;outline:none}
-  textarea:focus{border-color:var(--acc)}
+  textarea,input,select{width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;color:var(--txt);
+           padding:12px;font:16px/1.6 inherit;outline:none}
+  textarea{min-height:150px;resize:vertical}
+  textarea:focus,input:focus,select:focus{border-color:var(--acc)}
+  .seg{display:flex;gap:8px;margin-bottom:12px}
+  .seg button{flex:1;padding:10px;font-size:14px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--dim);font-weight:600}
+  .seg button.on{background:#1c2740;border-color:var(--acc);color:#dfe8ff}
   .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
   button{flex:1;min-width:104px;padding:12px 10px;border-radius:12px;border:1px solid var(--line);background:var(--card);
          color:var(--txt);font-size:15px;font-weight:600}
   button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
   button:active{opacity:.75}
+  details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:12px}
+  summary{font-size:14px;color:var(--dim);cursor:pointer;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  .field{margin-top:12px}
+  .field label{display:block;font-size:13px;color:var(--dim);margin-bottom:6px}
+  .hint{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.5}
   #status{color:var(--dim);font-size:13px;margin:12px 2px;min-height:20px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
   .src{color:var(--dim);font-size:14px;white-space:pre-wrap}
   .dst{font-size:17px;margin-top:8px;white-space:pre-wrap}
   .tag{display:inline-block;font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-bottom:8px}
   .err{color:#ff7a7a}
+  .warnbox{font-size:12px;color:var(--warn);margin-top:8px;line-height:1.5}
 </style>
 </head>
 <body>
 <h1>LinguaMate</h1>
-<div class="sub">粘贴中英文，自动判断方向 · 免费无需登录</div>
+<div class="sub">粘贴中英文，自动判断方向 · 术语表 · 大模型润色</div>
+
+<div class="seg">
+  <button id="eng-free" class="on">免费引擎</button>
+  <button id="eng-llm">大模型（DeepSeek）</button>
+</div>
 
 <textarea id="in" placeholder="把中文或英文粘进来，一段一段空行分隔效果最好"></textarea>
+
+<details>
+  <summary>⚙ 设置：API key / 术语表 / 模式</summary>
+  <div class="field">
+    <label>DeepSeek API key（只存在你这台设备，不会上传）</label>
+    <input id="key" type="password" placeholder="sk-..." autocomplete="off">
+    <div class="hint">在 platform.deepseek.com 创建。存在浏览器本地存储里；公用设备别存。</div>
+  </div>
+  <div class="field">
+    <label>模型</label>
+    <input id="model" value="deepseek-chat" autocomplete="off">
+  </div>
+  <div class="field">
+    <label>模式（大模型引擎可用）</label>
+    <select id="mode">
+      <option value="translate">翻译</option>
+      <option value="polish">润色（让译文/原文更地道）</option>
+      <option value="business">商务英文写作</option>
+    </select>
+  </div>
+  <div class="field">
+    <label>术语表（一行一条，格式：原文=译文）</label>
+    <textarea id="glossary" style="min-height:100px" placeholder="腾讯=Tencent&#10;混元=Hunyuan&#10;数据标注=data annotation"></textarea>
+    <div class="hint">大模型会强制按这里的译法翻译；免费引擎做不到，只做逐条替换。</div>
+  </div>
+</details>
 
 <div class="row">
   <button class="primary" id="go">翻译</button>
@@ -44,25 +86,48 @@
 <div id="out"></div>
 
 <script>
-const API = 'https://api.mymemory.translated.net/get';
+const MM = 'https://api.mymemory.translated.net/get';
+const DS = 'https://api.deepseek.com/chat/completions';
 const $ = s => document.querySelector(s);
+let engine = 'free', pairs = [];
+
 const status = (t, err) => { const el = $('#status'); el.textContent = t || ''; el.className = err ? 'err' : ''; };
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const isCJK = s => { const h = (s.match(/[\u4e00-\u9fff]/g) || []).length, a = (s.match(/[A-Za-z0-9]/g) || []).length; return h / Math.max(1, h + a) > 0.2; };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 const chunk = (text, limit = 450) => {
   const parts = text.split(/(?<=[。！？.!?\n])/); const out = []; let buf = '';
   for (const p of parts) { if (buf.length + p.length > limit && buf) { out.push(buf); buf = ''; } buf += p; }
   if (buf) out.push(buf); return out.length ? out : [text];
 };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function tr(text, src, dst) {
+function parseGlossary() {
+  return $('#glossary').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const m = l.split(/=|->|→/);
+    return m.length >= 2 ? [m[0].trim(), m.slice(1).join('=').trim()] : null;
+  }).filter(Boolean);
+}
+
+function applyLocalGlossary(text, toEN) {
+  const g = parseGlossary();
+  if (!g.length) return text;
+  let out = text;
+  for (const [a, b] of g) {
+    if (toEN) out = out.split(a).join(b);
+    else out = out.split(b).join(a);
+  }
+  return out;
+}
+
+// ---------- 免费引擎 ----------
+async function mmTranslate(text, src, dst) {
   let res = '';
   for (const c of chunk(text)) {
     let done = false;
     for (let i = 0; i < 3 && !done; i++) {
       try {
-        const url = `${API}?q=${encodeURIComponent(c)}&langpair=${src}|${dst}`;
-        const r = await fetch(url);
+        const r = await fetch(`${MM}?q=${encodeURIComponent(c)}&langpair=${src}|${dst}`);
         const j = await r.json();
         if (Number(j.responseStatus) !== 200) throw new Error(j.responseDetails || '接口返回异常');
         res += j.responseData.translatedText; done = true;
@@ -75,41 +140,65 @@ async function tr(text, src, dst) {
   return res;
 }
 
-let pairs = [];
+// ---------- 大模型引擎 ----------
+async function llmTranslate(text, toEN) {
+  const key = $('#key').value.trim();
+  if (!key) throw new Error('先展开「设置」，填上 DeepSeek API key');
+  const mode = $('#mode').value;
+  const g = parseGlossary();
+  const glossaryText = g.length ? '\n术语表（必须严格遵守，出现即按此译法）：\n' + g.map(([a, b]) => `${a} = ${b}`).join('\n') : '';
+  let sys;
+  if (mode === 'polish') sys = `你是母语级编辑。润色下面这段${toEN ? '英文' : '中文'}，保持原意，更自然专业。只输出润色后的文本，不要解释。${glossaryText}`;
+  else if (mode === 'business') sys = `你是十年经验的商务写作顾问。把下面的中文改写成得体的英文商务邮件正文：礼貌、简洁、明确，不用夸张形容词。只输出英文正文。${glossaryText}`;
+  else sys = `你是专业译者。把下面的${toEN ? '中文' : '英文'}翻译成${toEN ? '英文' : '中文'}，只输出译文，不要解释、不要加引号，保留段落换行。${glossaryText}`;
+
+  const body = { model: $('#model').value.trim() || 'deepseek-chat',
+                 messages: [{ role: 'system', content: sys }, { role: 'user', content: text }],
+                 temperature: 0.3 };
+  const r = await fetch(DS, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+    body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('接口返回 ' + r.status));
+  return j.choices[0].message.content.trim();
+}
+
 function render() {
-  $('#out').innerHTML = pairs.map((p, i) => `
+  $('#out').innerHTML = pairs.map(p => `
     <div class="card">
       <span class="tag">${p.dir}</span>
       <div class="src">${esc(p.src)}</div>
       <div class="dst">${esc(p.dst)}</div>
     </div>`).join('');
 }
-const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
 $('#go').onclick = async () => {
   const raw = $('#in').value.trim();
   if (!raw) return status('先粘点东西进来', true);
   let paras = raw.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
   if (paras.length === 1) { const lines = raw.split(/\n+/).map(s => s.trim()).filter(Boolean); if (lines.length > 1) paras = lines; }
-  pairs = []; render(); status(`共 ${paras.length} 段，开始翻译…`);
+  pairs = []; render(); status(`共 ${paras.length} 段，开始处理…`);
   for (let i = 0; i < paras.length; i++) {
     const p = paras[i], toEN = isCJK(p);
+    const mode = $('#mode').value;
+    const translating = engine === 'free' || mode === 'translate';
     try {
-      const t = await tr(p, toEN ? 'zh-CN' : 'en', toEN ? 'en' : 'zh-CN');
-      pairs.push({ src: p, dst: t, dir: toEN ? '中 → 英' : '英 → 中' });
+      let t;
+      if (engine === 'llm') t = await llmTranslate(p, toEN);
+      else t = applyLocalGlossary(await mmTranslate(p, toEN ? 'zh-CN' : 'en', toEN ? 'en' : 'zh-CN'), toEN);
+      pairs.push({ src: p, dst: t, dir: translating ? (toEN ? '中 → 英' : '英 → 中') : '润色' });
       render(); status(`已完成 ${i + 1}/${paras.length}`);
     } catch (e) {
-      status(`第 ${i + 1} 段失败：${e.message}（网络或接口限流，稍等再试）`, true); return;
+      status(`第 ${i + 1} 段失败：${e.message}`, true); return;
     }
-    localStorage.setItem('lm_text', raw);
   }
+  localStorage.setItem('lm_text', raw);
   status(`搞定，共 ${pairs.length} 段`);
 };
 
 $('#copy').onclick = async () => {
   if (!pairs.length) return status('还没翻译', true);
-  const text = pairs.map(p => p.dst).join('\n\n');
-  try { await navigator.clipboard.writeText(text); status('译文已复制'); }
+  try { await navigator.clipboard.writeText(pairs.map(p => p.dst).join('\n\n')); status('译文已复制'); }
   catch { status('复制失败，长按选中手动复制', true); }
 };
 
@@ -125,10 +214,34 @@ $('#md').onclick = () => {
 
 $('#clr').onclick = () => { $('#in').value = ''; pairs = []; render(); status(''); localStorage.removeItem('lm_text'); };
 
+function setEngine(e) {
+  engine = e;
+  $('#eng-free').classList.toggle('on', e === 'free');
+  $('#eng-llm').classList.toggle('on', e === 'llm');
+  $('#go').textContent = e === 'free' ? '翻译' : '处理';
+  localStorage.setItem('lm_engine', e);
+  if (e === 'llm' && !$('#key').value.trim()) {
+    document.querySelector('details').open = true;
+    status('大模型模式：先在下面填 API key');
+  } else status('');
+}
+$('#eng-free').onclick = () => setEngine('free');
+$('#eng-llm').onclick = () => setEngine('llm');
+
+// 恢复状态
 const DEMO = '我非常期待与你们合作，希望我们能够建立长期的商业关系。\n\nPlease find the attached quotation for your review.';
+$('#key').value = localStorage.getItem('lm_key') || '';
+$('#model').value = localStorage.getItem('lm_model') || 'deepseek-chat';
+$('#glossary').value = localStorage.getItem('lm_gloss') || '';
+$('#mode').value = localStorage.getItem('lm_mode') || 'translate';
 const saved = localStorage.getItem('lm_text');
-if (saved) { $('#in').value = saved; status('已恢复上次的内容'); }
-else { $('#in').value = DEMO; status('已填入示例，直接点「翻译」试试；换成你自己的内容即可'); }
+$('#in').value = saved || DEMO;
+status(saved ? '已恢复上次的内容' : '已填入示例，直接点「翻译」试试；换成你自己的内容即可');
+setEngine(localStorage.getItem('lm_engine') || 'free');
+['key', 'model', 'glossary', 'mode'].forEach(id => {
+  const el = $('#' + id);
+  el.addEventListener('change', () => localStorage.setItem('lm_' + (id === 'glossary' ? 'gloss' : id), el.value));
+});
 </script>
 </body>
 </html>
